@@ -1,9 +1,10 @@
 use std::fmt;
+use std::io::stdin;
 use std::process::exit;
+
 use Flag::*;
 use Register16::*;
 use Register8::*;
-
 
 use crate::mmu::Memory;
 
@@ -19,7 +20,18 @@ macro_rules! print_function_name {
             match &name[..name.len() - 3].rfind(':') {
                 Some(pos) => {
                     let n = &name[pos + 1..name.len() - 3];
-                    //println!("{:?} : {}", $a, n);
+                    if $a.debug_step {
+                        println!("{:?} : {:?}", $a, n);
+                        if !$a.break_done && $a.break_at != 0 && $a.break_at == $a.read_reg16(PC) {
+                            $a.break_done = true;
+                        }
+                        if $a.break_done {
+                            let mut input_string= String::new();
+                            stdin().read_line(&mut input_string);
+                        }
+                        //println!("0x{:x?}: 0x{:x?} : {:?} : {:?}", pc, opcode, self, $a);
+                        //println!("{:?} : {}", $a, n);
+                    }
                     n
                 }
                 None => &name[..name.len() - 3],
@@ -60,8 +72,8 @@ impl Register8 {
             Register8::F => 0,
             Register8::B => 3,
             Register8::C => 2,
-            Register8::D => 4,
-            Register8::E => 5,
+            Register8::D => 5,
+            Register8::E => 4,
             Register8::H => 7,
             Register8::L => 6,
         } as usize;
@@ -97,6 +109,9 @@ enum Register16 {
 pub struct Cpu {
     cycle: u8,
     registers: [u8; 12],
+    debug_step: bool,
+    break_at: u16,
+    break_done: bool,
 }
 
 impl fmt::Debug for Cpu {
@@ -116,48 +131,65 @@ impl fmt::Debug for Cpu {
     }
 }
 
-impl Default for Cpu {
-    fn default() -> Self {
+impl Cpu {
+    pub fn new(debug_step: bool, break_at: u16) -> Self {
         Self {
             cycle: 0,
             registers: [0; 12],
+            debug_step,
+            break_at,
+            break_done: false,
         }
     }
-}
 
-impl Cpu {
+    fn read8(memory: &Memory, addr: u16) -> u8 {
+        let val = memory.read8(addr);
+        //println!("read8(0x{:x}) -> 0x{:x}", addr, val);
+        return val;
+    }
+
+    fn read16(memory: &Memory, addr: u16) -> u16 {
+        let val = memory.read16(addr);
+        //println!("read16(0x{:x}) -> 0x{:x}", addr, val);
+        return val
+    }
+
+    fn write8(memory: &mut Memory, addr: u16, value: u8) {
+        memory.write8(addr, value);
+        //println!("write8(0x{:x}) -> 0x{:x}", addr, value);
+    }
+
     fn op_ld_n_nn(&mut self, reg: Register16, memory: &Memory) -> u8 {
         let pc = self.read_reg16(PC);
-        self.write_reg16(reg, memory.read16(pc + 1));
+        self.write_reg16(reg, Cpu::read16(memory, pc + 1));
         self.inc_pc(3);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 12;
     }
 
-    fn op_ld_n_n(&mut self, reg: Register8, memory: &Memory) -> u8 {
+    fn op_ld_n_n(&mut self, reg: Register8, memory: &Memory) {
         let pc = self.read_reg16(PC);
-        self.write_reg8(memory.read8(pc + 1), reg);
+        self.write_reg8(Cpu::read8(memory,  pc + 1), reg);
         self.inc_pc(2);
-        print_function_name!(self);
-        return 2;
+        //print_function_name!(self);
     }
 
     fn op_ld_r_mr(&mut self, dst_reg: Register8, addr_reg: Register16, memory: &Memory) -> u8 {
         let addr = self.read_reg16(addr_reg);
-        let val = memory.read8(addr);
+        let val = Cpu::read8(memory, addr);
         self.write_reg8(val, dst_reg);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 2;
     }
 
     fn op_ld_hl_a(&mut self, memory: &mut Memory, inc: i32) -> u8 {
         let a = self.read_reg8(A);
         let hl = self.read_reg16(HL);
-        memory.write8(hl, a);
+        Cpu::write8(memory, hl, a);
         self.write_reg16(HL, (hl as i32 + inc) as u16);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 8;
     }
 
@@ -171,7 +203,7 @@ impl Cpu {
         }
         self.write_reg8(new_a, A);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 4;
     }
 
@@ -179,7 +211,7 @@ impl Cpu {
         let val = Cpu::read_bit(bit, self.read_reg8(reg));
         self.set_flag(Zero, !val);
         self.inc_pc(2);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 8;
     }
 
@@ -190,11 +222,6 @@ impl Cpu {
     fn inc16(&mut self, reg: Register16, inc: i32) {
         let val = self.read_reg16(reg);
         self.write_reg16(reg, (val as i32 + inc) as u16);
-    }
-
-    fn inc8(&mut self, reg: Register8, inc: i32) {
-        let val = self.read_reg8(reg);
-        self.write_reg8((val as i32 + inc) as u8, reg);
     }
 
     fn one_bit(bit: u8, value: u8) -> u8 {
@@ -257,15 +284,16 @@ impl Cpu {
     }
 
     fn write_reg16(&mut self, reg: Register16, value: u16) {
-        let lo = (value & 0x00ff) as u8;
-        let hi = (value >> 8) as u8;
+        //let lo = (value & 0x00ff) as u8;
+        //let hi = (value >> 8) as u8;
+        let [hi, lo] = value.to_be_bytes();
         self.registers[reg.byte_index()] = lo;
         self.registers[reg.byte_index() + 1] = hi;
     }
 
     fn op_cb(&mut self, memory: &mut Memory) -> u8 {
         let pc = self.read_reg16(PC) + 1;
-        let opcode = memory.read8(pc);
+        let opcode = Cpu::read8(memory, pc);
         //println!("0x{:x?}: 0xcb{:x?}", pc, opcode);
         return match opcode {
             0x78 => self.op_bc_bit(7, B),
@@ -309,15 +337,14 @@ impl Cpu {
         };
     }
 
-    pub fn step(&mut self, clock: u32, memory: &mut Memory) {
-        let pc = self.read_reg16(PC);
-        let opcode = memory.read8(pc);
-
+    pub fn step(&mut self, memory: &mut Memory) {
         if self.cycle != 0 {
             self.cycle -= 1;
             return;
         }
-        println!("0x{:x?}: 0x{:x?} : {:?}", pc, opcode,self);
+        let pc = self.read_reg16(PC);
+        let opcode = Cpu::read8(memory, pc);
+
         self.cycle = match opcode {
             0xaf => self.op_xor(A),
             0x17 => {
@@ -376,7 +403,7 @@ impl Cpu {
                 4
             }
             0xfe => {
-                self.op_cp(memory.read8(self.read_reg16(PC) + 1), 2);
+                self.op_cp(Cpu::read8(memory, self.read_reg16(PC) + 1), 2);
                 8
             }
 
@@ -428,13 +455,13 @@ impl Cpu {
                 self.op_inc16(SP);
                 8
             }
-            0x3e => self.op_ld_n_n(A, memory),
-            0x06 => self.op_ld_n_n(B, memory),
-            0x0E => self.op_ld_n_n(C, memory),
-            0x16 => self.op_ld_n_n(D, memory),
-            0x1e => self.op_ld_n_n(E, memory),
-            0x26 => self.op_ld_n_n(H, memory),
-            0x2e => self.op_ld_n_n(L, memory),
+            0x3e => {self.op_ld_n_n(A, memory); 8},
+            0x06 => {self.op_ld_n_n(B, memory); 8},
+            0x0E => {self.op_ld_n_n(C, memory); 8},
+            0x16 => {self.op_ld_n_n(D, memory); 8},
+            0x1e => {self.op_ld_n_n(E, memory); 8},
+            0x26 => {self.op_ld_n_n(H, memory); 8},
+            0x2e => {self.op_ld_n_n(L, memory); 8},
             0xe0 => self.op_ld_a8_r(A, memory, 0xFF00),
             0xf0 => self.op_ld_r_a8(A, memory, 0xFF00),
             0xea => self.op_ld_a16_r(A, memory),
@@ -475,17 +502,17 @@ impl Cpu {
     ) -> u8 {
         let pc = self.read_reg16(PC);
         self.inc_pc(2);
-        print_function_name!(self);
+        //print_function_name!(self);
         if jump_condition.is_some() {
             return if jump_condition.unwrap()(self) {
-                let n = memory.read8(pc + 1);
+                let n = Cpu::read8(memory, pc + 1);
                 self.inc_pc((n as i8) as i32);
                 12
             } else {
                 8
             };
         } else {
-            let n = memory.read8(pc + 1);
+            let n = Cpu::read8(memory, pc + 1);
             self.inc_pc((n as i8) as i32);
             8
         }
@@ -502,42 +529,42 @@ impl Cpu {
         self.set_flag(Negative, false);
         self.write_reg8(val, A);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 1;
     }
 
     fn op_ld_c_a(&mut self, memory: &mut Memory) -> u8 {
         let a = self.read_reg8(A);
         let c = self.read_reg8(C) as u16;
-        memory.write8(0xFF00 + c, a);
+        Cpu::write8(memory, 0xFF00 + c, a);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 2;
     }
 
     fn op_ld_a8_r(&mut self, reg: Register8, memory: &mut Memory, offset: u16) -> u8 {
         let a = self.read_reg8(reg);
-        let val = memory.read8(self.read_reg16(PC) + 1) as u16;
-        memory.write8(offset + val, a);
+        let val = Cpu::read8(memory, self.read_reg16(PC) + 1) as u16;
+        Cpu::write8(memory, offset + val, a);
         self.inc_pc(2);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 12;
     }
 
     fn op_ld_r_a8(&mut self, reg: Register8, memory: &mut Memory, offset: u16) -> u8 {
-        let val = memory.read8(self.read_reg16(PC) + 1) as u16;
-        self.write_reg8(memory.read8(offset + val), reg);
+        let val = Cpu::read8(memory, self.read_reg16(PC) + 1) as u16;
+        self.write_reg8(Cpu::read8(memory, offset + val), reg);
         self.inc_pc(2);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 12;
     }
 
     fn op_ld_a16_r(&mut self, reg: Register8, memory: &mut Memory) -> u8 {
         let a = self.read_reg8(reg);
-        let val = memory.read16(self.read_reg16(PC) + 1);
-        memory.write8(val, a);
+        let val = Cpu::read16(memory, self.read_reg16(PC) + 1);
+        Cpu::write8(memory, val, a);
         self.inc_pc(3);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 3;
     }
 
@@ -559,7 +586,7 @@ impl Cpu {
         self.set_flag(Negative, subtraction);
         self.write_reg8(r, dest);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 4;
     }
 
@@ -579,7 +606,7 @@ impl Cpu {
         self.set_flag(Negative, subtraction);
         self.write_reg8(r, dest);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
     }
 
     fn op_reg16_math_1(
@@ -598,7 +625,7 @@ impl Cpu {
         self.set_flag(Negative, subtraction);
         self.write_reg16(dest, r);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
     }
 
     fn sub_r_r(&mut self, dst: Register8, reg1: Register8, reg2: Register8) -> u8 {
@@ -607,24 +634,24 @@ impl Cpu {
 
     fn op_call(&mut self, memory: &mut Memory) -> u8 {
         let pc = self.read_reg16(PC);
-        let jmp_addr = memory.read16(pc + 1);
+        let jmp_addr = Cpu::read16(memory, pc + 1);
         let return_addr = pc + 3;
         self.push16(memory, return_addr);
         self.write_reg16(PC, jmp_addr);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 12;
     }
 
     fn op_nop(&mut self) -> u8 {
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 1;
     }
 
     fn op_ld_r_r(&mut self, src: Register8, dst: Register8) -> u8 {
         self.write_reg8(self.read_reg8(src), dst);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 1;
     }
 
@@ -635,7 +662,7 @@ impl Cpu {
         self.set_flag(HalfCarry, a.saturating_sub(n) > 0xF);
         self.set_flag(Carry, a < n);
         self.inc_pc(size);
-        print_function_name!(self);
+        //print_function_name!(self);
         //println!("{:x?} : {:x?}", n, a);
     }
 
@@ -643,22 +670,22 @@ impl Cpu {
         let value = self.read_reg16(reg);
         self.push16(memory, value);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 16;
     }
 
     fn push16(&mut self, memory: &mut Memory, value: u16) {
         let sp = self.read_reg16(SP);
         let [hi, lo] = value.to_be_bytes();
-        memory.write8(sp - 1, hi);
-        memory.write8(sp - 2, lo);
+        Cpu::write8(memory, sp - 1, hi);
+        Cpu::write8(memory, sp - 2, lo);
         self.inc16(SP, -3);
     }
 
     fn pop16(&mut self, memory: &mut Memory, reg: Register16) {
         let sp = self.read_reg16(SP);
-        let lo = memory.read8(sp + 1) as u16;
-        let hi = memory.read8(sp + 2) as u16;
+        let lo = Cpu::read8(memory, sp + 1) as u16;
+        let hi = Cpu::read8(memory, sp + 2) as u16;
         self.inc16(SP, 3);
         let val = (hi << 8) | lo;
         self.write_reg16(reg, val)
@@ -666,22 +693,19 @@ impl Cpu {
 
     fn op_inc8(&mut self, reg: Register8) -> u8 {
         self.op_reg8_math_1(reg, reg, |x| x.overflowing_add(1), false);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 4;
     }
 
     fn op_dec8(&mut self, reg: Register8) -> u8 {
         self.op_reg8_math_1(reg, reg, |x| x.overflowing_sub(1), true);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 4;
     }
 
     fn op_inc16(&mut self, reg: Register16) {
         self.op_reg16_math_1(reg, reg, |x| x.overflowing_add(1), false);
-        print_function_name!(self);
-        if matches!(reg, DE) {
-            println!("0x{:x?} : cpu = {:?},", self.read_reg16(DE), self);
-        }
+        //print_function_name!(self);
     }
 
     fn op_rl(&mut self, reg: Register8, size: u8) {
@@ -695,19 +719,19 @@ impl Cpu {
         self.set_flag(Negative, false);
         self.set_flag(HalfCarry, false);
         self.inc_pc(size as i32);
-        print_function_name!(self);
+        //print_function_name!(self);
     }
 
     fn op_ret(&mut self, memory: &mut Memory) -> u8 {
         self.pop16(memory, PC);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 8;
     }
 
     fn op_pop16(&mut self, reg: Register16, mem: &mut Memory) -> u8 {
         self.pop16(mem, reg);
         self.inc_pc(1);
-        print_function_name!(self);
+        //print_function_name!(self);
         return 12;
     }
 }

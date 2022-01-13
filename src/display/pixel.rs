@@ -1,4 +1,3 @@
-use winit::window::Window;
 use crate::display::Display;
 
 const WIDTH: usize = 160;
@@ -15,9 +14,9 @@ pub struct PixelWindow {
 impl PixelWindow {
     pub fn new() -> Self {
         Self {
-            palette: [[0xff, 0x00, 0x00, 0xff],
+            palette: [[0xff, 0x00, 0x00, 0x00],
                       [0x00, 0xff, 0x00, 0xff],
-                      [0x00, 0x00, 0xff, 0xff],
+                      [0x00, 0xff, 0xff, 0xff],
                       [0xff, 0xff, 0x00, 0xff]],
             screen: [0; SIZE],
             x: 0,
@@ -26,7 +25,6 @@ impl PixelWindow {
     }
 
     pub fn draw(&self, screen: &mut [u8]) {
-        //debug_assert_eq!(screen.len(), 4 * self.cells.len());
         screen.copy_from_slice(self.screen.as_slice());
     }
 
@@ -34,8 +32,7 @@ impl PixelWindow {
 
 impl Display for PixelWindow {
     fn write(&mut self, value: u8) {
-        println!("{}",value);
-        let i = self.y*HEIGHT*4 + self.x*4;
+        let i = self.y*WIDTH*4 + self.x*4;
         let color = self.palette[value as usize];
         self.screen[i] = color[0];
         self.screen[i+1] = color[1];
